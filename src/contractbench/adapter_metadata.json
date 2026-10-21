@@ -22,7 +22,7 @@
         "added_agents": [],
         "parity_matching_agents": null,
         "parity_unmatching_agents": null,
-        "parity_costs": null,
+        "parity_costs": "$50",
         "notes": "1:1 mapping from source benchmark. Upstream ships tasks in Harbor-native form (harbor/cookbook-export); the adapter copies them verbatim at a pinned ref."
       }
     ]

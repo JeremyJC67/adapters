@@ -179,12 +179,12 @@ Override the agent/model on the command line, e.g.
 
 ## Comparison with Original Benchmark (Parity)
 
-Oracle and agent parity are reported separately. The oracle row checks the
-adaptation; only the agent row is evidence of harness parity.
+The oracle check is reported separately from agent parity: the oracle agent
+scores **33/33 at reward 1.0** on the Harbor side (archived under `oracle/` in
+the parity upload). The table below is agent parity only.
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original (mean ± SEM) | Harbor (mean ± SEM) |
 |-------|-------|--------|----------------|--------------|-----------------------|---------------------|
-| oracle | oracle | Oracle pass rate (%) | 1 | 33 tasks (100% of full set) | 100.0 (33/33) | 100.0 (33/33) |
 | mini-swe-agent | openai/gpt-4o | Mean reward (%) | 3 | 33 tasks (100% of full set) | 37.12 ± 2.31 | 41.95 ± 2.48 |
 | mini-swe-agent | openai/gpt-4o | Pass rate, reward == 1.0 (%) | 3 | 33 tasks (100% of full set) | 32.32 ± 2.02 | 38.22 ± 1.86 |
 
@@ -205,10 +205,11 @@ byte-identical action every turn and exhausts the cap, whereas at a non-zero
 temperature it varies and recovers. Parity is therefore only claimed at
 temperature 0.0.
 
-**Known gap: the Harbor side is not three full 33-task runs.** The Harbor side
-ran 99 trials, 7 of which errored on transient container-setup network failures
-and agent timeouts, leaving 31-33 scored tasks per run. The original side ran 99
-trials with 0 errors. The Harbor means above are over the scored tasks.
+**Scored trials.** The original side scored 99 of 99 trials and the Harbor side
+97 of 99. On the Harbor side, 5 trials hit the agent timeout and were verified
+and scored as normal agent outcomes; 2 trials, both in run 3, failed during
+container setup on a transient network error before the agent started, so
+run 3 is averaged over 31 tasks and runs 1-2 over all 33.
 
 ### Reproduction Steps
 
