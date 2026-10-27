@@ -10,16 +10,25 @@ The upstream repository already ships every task in Harbor-native form under
 server via ENTRYPOINT, a solution/solve.sh and a tests/test.sh that writes
 ``/logs/verifier/reward.txt``). The adapter clones the public repo at a pinned
 ref, copies each task directory, and then applies a fixed set of changes that
-leave the scoring logic untouched:
+leave the instruction, the server's behaviour and the scoring logic untouched:
 
 1. strip the provenance/canary footer from ``instruction.md``;
 2. replace the benchmark name in every agent-visible file (and, consistently,
    in tests/ and solution/) with a same-length neutral name;
 3. grade from a trusted copy of the grading helper in ``tests/`` instead of the
-   agent-writable ``/app/shared`` package, and install the hardened
-   ``tests/test.sh`` from ``task-template/``;
-4. preinstall the verifier's pytest dependencies in the image;
-5. credit the benchmark authors in ``task.toml``.
+   ``/app/shared`` package next to the server, and install the verifier
+   entrypoint and image from ``task-template/``;
+4. run the task server in its own compose service (``task-server``) instead of
+   the agent's container, so its source and request log are out of the agent's
+   reach; the agent still reaches it at ``localhost:8080``;
+5. run the verifier in a separate container (``environment_mode =
+   "separate"``) on the agent's ``/root/output`` and the server's
+   ``/root/logs``, collected as artifacts;
+6. set ``version = "1.0"`` and credit the benchmark authors in ``task.toml``.
+
+Each task is built in a staging directory and moved into place only when every
+step succeeded, and the result is checked for leftover canary text and
+benchmark names before it is moved.
 
 Source: https://github.com/SecurityLab-UCD/contractbench
 Paper:  https://arxiv.org/abs/2605.17281
@@ -29,6 +38,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -73,8 +83,53 @@ _TRUSTED_IMPORT = (
     "from server_logging import read_log, write_reward\n"
 )
 
-_VERIFIER_DEPS = "RUN pip install --no-cache-dir pytest==9.1.1 pytest-json-ctrf==0.6.1\n"
-_FASTAPI_INSTALL_RE = re.compile(r"^RUN pip install --no-cache-dir fastapi[^\n]*\n", re.M)
+# Agent-visible text must not identify the benchmark after generation.
+_GUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+_CANARY_RE = re.compile(r"canary", re.IGNORECASE)
+
+# Upstream environment/Dockerfile lines that put the server in the agent's
+# container. The task-server image keeps the server lines and runs uvicorn in
+# the foreground; the agent image drops them.
+_SERVER_COPY_LINES = (
+    "COPY shared/ /app/shared/\n",
+    "COPY server.py /app/server.py\n",
+    "ENV PYTHONPATH=/app\n",
+)
+_START_LINES = (
+    "RUN printf '#!/bin/bash\\nuvicorn server:app --host 0.0.0.0 --port 8080 "
+    "--log-level warning &\\nsleep 1\\nexec \"$@\"\\n' > /start.sh && chmod +x /start.sh\n",
+    'ENTRYPOINT ["/start.sh"]\n',
+    'CMD ["/bin/bash"]\n',
+)
+_SERVER_CMD = (
+    'CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", '
+    '"--log-level", "warning"]\n'
+)
+_MAIN_DOCKERFILE_HEADER = (
+    "# Agent container. The task server runs in the `task-server` compose service\n"
+    "# (environment/task-server/), reachable at localhost:8080; see\n"
+    "# environment/docker-compose.yaml.\n"
+)
+_SERVER_DOCKERFILE_HEADER = (
+    "# Task server, run as the `task-server` compose service. The agent reaches it\n"
+    "# at localhost:8080 but cannot read its files.\n"
+)
+
+# task.toml edits: contract version key, artifacts handed to the separate
+# verifier, and the verifier mode.
+_SCHEMA_LINE = 'schema_version = "1.3"\n'
+_VERSION_LINE = 'version = "1.0"\n'
+_EMPTY_ARTIFACTS = "artifacts = []\n"
+_ARTIFACTS = (
+    "artifacts = [\n"
+    '  { source = "/root/output" },\n'
+    '  { source = "/root/logs", service = "task-server" },\n'
+    "]\n"
+)
+_VERIFIER_HEADER = "[verifier]\n"
+_SEPARATE_VERIFIER = '[verifier]\nenvironment_mode = "separate"\n'
 
 # A cookbook-export task directory must contain these to be a valid Harbor task.
 REQUIRED_TASK_FILES = (
@@ -211,16 +266,28 @@ class ContractBenchAdapter:
         self._validate_source_task(src)
 
         dst = self.output_dir / local_task_id
-        if dst.exists():
-            shutil.rmtree(dst)
-        # copy2-based copytree preserves the +x bits on solve.sh / test.sh.
-        shutil.copytree(src, dst)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Build in a staging directory next to the output, and move the task
+        # into place only once every step succeeded: a failure never leaves a
+        # half-processed task that a later run would skip as existing.
+        staging = Path(tempfile.mkdtemp(prefix=f".{local_task_id}.", dir=self.output_dir))
+        try:
+            work = staging / local_task_id
+            # copy2-based copytree preserves the +x bits on solve.sh / test.sh.
+            shutil.copytree(src, work)
 
-        self._sanitize_instruction(dst / "instruction.md")
-        self._scrub_benchmark_name(dst)
-        self._install_trusted_verifier(dst)
-        self._preinstall_verifier_deps(dst / "environment" / "Dockerfile")
-        self._set_authors(dst / "task.toml")
+            self._sanitize_instruction(work / "instruction.md")
+            self._scrub_benchmark_name(work)
+            self._install_trusted_verifier(work)
+            self._isolate_server(work / "environment")
+            self._configure_task_toml(work / "task.toml")
+            self._check_agent_visible(work)
+
+            if dst.exists():
+                shutil.rmtree(dst)
+            work.rename(dst)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
         return dst
 
     @staticmethod
@@ -230,6 +297,28 @@ class ContractBenchAdapter:
         cleaned = _CANARY_COMMENT_RE.sub("\n", original).rstrip() + "\n"
         if cleaned != original:
             instruction.write_text(cleaned)
+
+    @staticmethod
+    def _check_agent_visible(task: Path) -> None:
+        """Fail if canary text or the benchmark name survived in agent-visible files.
+
+        The agent sees instruction.md and whatever the server returns; the
+        server's files are the only source of served data.
+        """
+        files = [task / "instruction.md"]
+        files.extend(p for p in sorted((task / "environment").rglob("*")) if p.is_file())
+        for path in files:
+            try:
+                text = path.read_text()
+            except UnicodeDecodeError:
+                continue
+            for pattern, what in (
+                (_CANARY_RE, "canary text"),
+                (_GUID_RE, "a GUID"),
+                (_NAME_RE, "the benchmark name"),
+            ):
+                if pattern.search(text):
+                    raise ValueError(f"{path}: {what} survived generation")
 
     @staticmethod
     def _scrub_benchmark_name(task: Path) -> None:
@@ -252,7 +341,7 @@ class ContractBenchAdapter:
 
     @staticmethod
     def _install_trusted_verifier(task: Path) -> None:
-        """Grade from tests/, never from the agent-writable /app/shared package."""
+        """Grade from tests/, never from the /app/shared package next to the server."""
         tests = task / "tests"
         shutil.copy2(
             task / "environment" / "shared" / "server_logging.py",
@@ -264,24 +353,57 @@ class ContractBenchAdapter:
         if n != 1 or "\nimport os\n" not in source:
             raise ValueError(f"{test_outputs}: unexpected grading-helper import")
         test_outputs.write_text(rewritten)
-        shutil.copy2(TEMPLATE_DIR / "tests" / "test.sh", tests / "test.sh")
+        for name in ("test.sh", "Dockerfile"):
+            shutil.copy2(TEMPLATE_DIR / "tests" / name, tests / name)
 
     @staticmethod
-    def _preinstall_verifier_deps(dockerfile: Path) -> None:
-        text = dockerfile.read_text()
-        if _VERIFIER_DEPS in text:
-            return
-        match = _FASTAPI_INSTALL_RE.search(text)
-        if match is None:
-            raise ValueError(f"{dockerfile}: no fastapi install line to extend")
-        dockerfile.write_text(text[: match.end()] + _VERIFIER_DEPS + text[match.end() :])
+    def _isolate_server(environment: Path) -> None:
+        """Move the task server out of the agent's container into ``task-server``."""
+        lines = (environment / "Dockerfile").read_text().splitlines(keepends=True)
+        for line in _SERVER_COPY_LINES + _START_LINES:
+            if lines.count(line) != 1:
+                raise ValueError(f"{environment / 'Dockerfile'}: expected one {line!r}")
 
-    def _set_authors(self, task_toml: Path) -> None:
-        text = task_toml.read_text()
-        updated, n = re.subn(r"(?m)^authors = .*$", self._authors_line, text)
+        server_dir = environment / "task-server"
+        server_dir.mkdir()
+        (environment / "server.py").rename(server_dir / "server.py")
+        (environment / "shared").rename(server_dir / "shared")
+
+        server = "".join(
+            _SERVER_CMD if line == _START_LINES[0] else line
+            for line in lines
+            if line not in _START_LINES[1:]
+        )
+        (server_dir / "Dockerfile").write_text(
+            _SERVER_DOCKERFILE_HEADER + "\n" + server.rstrip() + "\n"
+        )
+
+        removed = _SERVER_COPY_LINES + _START_LINES
+        main = "".join(line for line in lines if line not in removed)
+        main = re.sub(r"\n{3,}", "\n\n", main)
+        (environment / "Dockerfile").write_text(
+            _MAIN_DOCKERFILE_HEADER + "\n" + main.rstrip() + "\n"
+        )
+        shutil.copy2(
+            TEMPLATE_DIR / "environment" / "docker-compose.yaml",
+            environment / "docker-compose.yaml",
+        )
+
+    def _configure_task_toml(self, task_toml: Path) -> None:
+        lines = task_toml.read_text().splitlines(keepends=True)
+        for old, new in (
+            (_SCHEMA_LINE, _VERSION_LINE),
+            (_EMPTY_ARTIFACTS, _ARTIFACTS),
+            (_VERIFIER_HEADER, _SEPARATE_VERIFIER),
+        ):
+            if lines.count(old) != 1:
+                raise ValueError(f"{task_toml}: expected exactly one {old!r}")
+            lines[lines.index(old)] = new
+        text = "".join(lines)
+        text, n = re.subn(r"(?m)^authors = .*$", self._authors_line, text)
         if n != 1:
             raise ValueError(f"{task_toml}: expected exactly one authors line")
-        task_toml.write_text(updated)
+        task_toml.write_text(text)
 
     @staticmethod
     def _authors_toml(authors: list[dict[str, str]]) -> str:

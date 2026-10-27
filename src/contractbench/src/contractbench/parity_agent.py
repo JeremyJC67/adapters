@@ -15,8 +15,10 @@ Matched behaviour (original value in parentheses):
 - OpenAI chat completions with ``tool_choice="auto"``, ``temperature=0.0`` and
   ``max_tokens=16384`` (``LLMAgent`` defaults);
 - at most 30 model calls (``MAX_TURNS = 30``);
-- a soft 300 s deadline checked only before each model call
-  (``AGENT_TIMEOUT = 300`` + ``run_agent_loop``);
+- a soft deadline checked only before each model call (``run_agent_loop``):
+  300 s by default (``AGENT_TIMEOUT = 300``), raised with
+  ``run_task_docker.py --timeout``; the parity runs use 600 s on both sides
+  (``agent_timeout_sec: 600`` in ``contractbench-parity.yaml``);
 - the loop stops on the first assistant turn without tool calls;
 - each tool call runs ``bash -c <command>`` in the task container with a 60 s
   limit; output is stdout, then stderr, truncated at 30,000 characters, with
@@ -24,7 +26,13 @@ Matched behaviour (original value in parentheses):
   (``_exec_in_container``).
 
 Harbor's own agent timeout is set above the soft deadline in the parity config,
-so a trial ends the way it does upstream: at the turn boundary after 300 s.
+so a trial ends the way it does upstream: at the first turn boundary after the
+deadline.
+
+Harbor 0.25's Docker environment decodes command output with
+``errors="replace"`` (as upstream does since its binary-output fix) and signals
+a command timeout with ``RuntimeError("Command timed out after ...")``, which
+``_exec`` maps to upstream's ``(command timed out after 60s)`` observation.
 """
 
 from __future__ import annotations

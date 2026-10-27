@@ -1,24 +1,17 @@
+# Agent container. The task server runs in the `task-server` compose service
+# (environment/task-server/), reachable at localhost:8080; see
+# environment/docker-compose.yaml.
+
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-
 
 # Install curl (system prompt promises it; python:3.12-slim doesn't include it)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir fastapi uvicorn python-multipart
-RUN pip install --no-cache-dir pytest==9.1.1 pytest-json-ctrf==0.6.1
 
 WORKDIR /app
-COPY shared/ /app/shared/
-COPY server.py /app/server.py
 
 RUN mkdir -p /root/logs /root/output
-
-ENV PYTHONPATH=/app
-
-RUN printf '#!/bin/bash\nuvicorn server:app --host 0.0.0.0 --port 8080 --log-level warning &\nsleep 1\nexec "$@"\n' > /start.sh && chmod +x /start.sh
-
-ENTRYPOINT ["/start.sh"]
-CMD ["/bin/bash"]
