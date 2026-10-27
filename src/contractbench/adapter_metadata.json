@@ -7,9 +7,9 @@
         "split": "full",
         "size": 33,
         "harness": "agent",
-        "supported_agents": null,
+        "supported_agents": ["contractbench-native-agent@e8b9427"],
         "adaptable": true,
-        "notes": "Dual-axis observation-contract benchmark. 33 tasks where an LLM agent interacts with a local FastAPI server and must preserve API contracts along two axes: validity and integrity."
+        "notes": "Dual-axis observation-contract benchmark. 33 tasks where an LLM agent interacts with a local FastAPI server and must preserve API contracts along two axes: validity and integrity. The original harness ships one agent: a native OpenAI/Anthropic/Gemini tool-calling loop with a single bash tool (agents/docker_runner.py), versioned here by the harness commit used for parity."
       }
     ],
     "harbor_adapter": [
@@ -19,11 +19,11 @@
         "parity_benchmark_size": 33,
         "parity_sampling_rate": 1.0,
         "registry_benchmark_size": 33,
-        "added_agents": [],
-        "parity_matching_agents": null,
-        "parity_unmatching_agents": null,
-        "parity_costs": "$50",
-        "notes": "1:1 mapping from source benchmark. Upstream ships tasks in Harbor-native form (harbor/cookbook-export); the adapter copies them verbatim at a pinned ref."
+        "added_agents": ["contractbench-parity-agent@1.0.0"],
+        "parity_matching_agents": ["contractbench-parity-agent@1.0.0+gpt-4o-2024-08-06"],
+        "parity_unmatching_agents": ["None"],
+        "parity_costs": "$38",
+        "notes": "Adapter copies the 33 upstream harbor/cookbook-export tasks and applies the documented changes (canary strip, benchmark-name scrub, trusted grading helper in tests/, preinstalled verifier deps, author credits); scoring logic is unchanged. Parity uses contractbench-parity-agent@1.0.0, a Harbor port of the original harness's tool-calling loop (Scenario 3). Standard-agent run on the same tasks (generalization, not parity): mini-swe-agent@2.4.6 with gpt-4o-2024-08-06, temperature 0.0, step_limit 30, 1 run: mean reward 34.22%, pass rate 28.12% over 32 scored tasks (1 trial lost to a container-setup network error), cost $11.11. parity_costs covers the parity experiment only: original side about $22 (list price from logged token counts) plus Harbor side $15.49 (sanity check, 3 runs and the 3 rerun trials, from recorded usage)."
       }
     ]
   }

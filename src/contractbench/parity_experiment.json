@@ -1,13 +1,14 @@
 [
   {
     "adapter_name": "contractbench",
-    "agent": "mini-swe-agent",
-    "model": "openai/gpt-4o",
-    "date": "2026-09-02",
+    "agent": "contractbench-parity-agent@1.0.0",
+    "model": "gpt-4o-2024-08-06",
+    "date": "2026-10-27",
     "adapted_benchmark_size": 33,
     "parity_benchmark_size": 33,
     "number_of_runs": 3,
-    "notes": "Model parity, 3 runs per side over all 33 tasks. Both sides are configured identically so that the harness is the only variable: openai/gpt-4o at temperature 0.0, a 30-step cap, the same bash tool, and the same environments and verifiers (Harbor tasks are byte-identical copies of the upstream cookbook-export tasks). The 30-step cap and temperature 0.0 mirror the original harness defaults (MAX_TURNS = 30 in agents/docker_runner.py; --temperature 0.0 in experiments/scripts/run_task_docker.py). Matching temperature is load-bearing: at Harbor's provider-default temperature the Harbor side scores materially higher, because at temperature 0 a failing model regenerates a byte-identical action every turn and exhausts the cap, whereas at a non-zero temperature it varies and recovers. Harbor side: 97 of 99 trials scored. 5 trials hit the agent timeout and were verified and scored as normal agent outcomes; 2 trials (both in run 3) failed during container setup on a transient network error before the agent started and produced no score, so run 3 is over 31 tasks. Original side: 99 of 99 trials scored. The oracle check (33/33 at reward 1.0) is reported separately in the README and in the oracle/ folder of the parity upload. Both metrics satisfy the documented parity criterion max(A) >= min(B) and max(B) >= min(A).",
+    "notes": "Matched-agent parity (Scenario 3: the original benchmark uses a custom agent). Both sides run ContractBench's own tool-calling loop: natively in the original harness (agents/docker_runner.py at the original_parity_repo revision), and in Harbor as contractbench-parity-agent@1.0.0 (src/contractbench/parity_agent.py), a port that keeps the system prompt, bash tool definition, temperature 0.0, max_tokens 16384, 30 model calls, the soft deadline (600 s, matching the original side's run_task_docker.py --timeout 600), 60 s per-command limit and 30,000-character output truncation. Original side: run on 2026-09-02 requesting openai/gpt-4o; the harness does not record the resolved model, and Harbor trajectories from the same day and API key record gpt-4o-2024-08-06 as the model serving that alias. Harbor side: run on 2026-10-27 requesting gpt-4o-2024-08-06 explicitly; every response reports gpt-4o-2024-08-06. Scored trials: original 99/99, Harbor 99/99. Per-task: no task is solved on only one side; 28 of 33 tasks have identical pass counts across the 3 runs and the other 5 differ by one run. Order followed on the Harbor side: 6-task sanity check, one full run, then two more full runs. The 3 Harbor trials of retry-backoff-compliance first ran at the upstream default 300 s deadline, reached it and scored 0; they were rerun at 600 s and again scored 0 (ending at the 30-call cap like the original side). No other Harbor trial reached 300 s. Harbor-side cost $15.49 (sanity check, 3 runs and the 3 rerun trials, from recorded token usage); original side about $22 at list price from logged token counts.",
+    "original_parity_repo": "https://github.com/SecurityLab-UCD/ContractBench/tree/e8b94270cdc8cf366820a276a3f4aac77aea2578",
     "adapter_pr": [
       "https://github.com/harbor-framework/harbor/pull/1949",
       "https://github.com/harbor-framework/adapters/pull/8"
@@ -22,33 +23,33 @@
       {
         "benchmark_name": "ContractBench",
         "metric": "Mean reward (%)",
-        "original": "37.12 +/- 2.31",
-        "harbor": "41.95 +/- 2.48",
+        "original": "37.12 ± 2.31",
+        "harbor": "36.06 ± 1.06",
         "original_runs": [
           35.61,
           41.67,
           34.09
         ],
         "harbor_runs": [
-          37.88,
-          41.52,
-          46.45
+          37.12,
+          37.12,
+          33.94
         ]
       },
       {
         "benchmark_name": "ContractBench",
         "metric": "Pass rate, reward == 1.0 (%)",
-        "original": "32.32 +/- 2.02",
-        "harbor": "38.22 +/- 1.86",
+        "original": "32.32 ± 2.02",
+        "harbor": "31.31 ± 2.02",
         "original_runs": [
           30.3,
           36.36,
           30.3
         ],
         "harbor_runs": [
-          36.36,
-          36.36,
-          41.94
+          33.33,
+          33.33,
+          27.27
         ]
       }
     ]
